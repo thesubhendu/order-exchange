@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -17,7 +18,10 @@ class AssetFactory extends Factory
     public function definition(): array
     {
         return [
-            //
+            'user_id' => User::factory(),
+            'symbol' => fake()->randomElement(['BTC', 'ETH']),
+            'amount' => fake()->randomFloat(8, 0, 1000000),
+            'locked_amount' => fake()->randomFloat(8, 0, 1000000),
         ];
     }
 }

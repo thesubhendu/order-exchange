@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
@@ -17,7 +18,12 @@ class OrderFactory extends Factory
     public function definition(): array
     {
         return [
-            //
+            'user_id' => User::factory(),
+            'symbol' => fake()->randomElement(['BTC', 'ETH']),
+            'side' => fake()->randomElement(['buy', 'sell']),
+            'price' => fake()->randomFloat(8, 0, 1000000),
+            'amount' => fake()->randomFloat(8, 0, 1000000),
+            'status' => fake()->randomElement([1, 2, 3]),
         ];
     }
 }
