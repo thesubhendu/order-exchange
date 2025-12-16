@@ -16,12 +16,8 @@ use Illuminate\Support\Facades\DB;
 
 class OrderService
 {
-    /**
-     * Create a new class instance.
-     */
     public function __construct()
     {
-        //
     }
 
     public function getOpenOrders(?string $symbol=null): Collection
@@ -76,108 +72,24 @@ class OrderService
                 ->first();
 
             if ($matchingSellOrder) {
-                $lockedBuyOrder = Order::lockForUpdate()->find($buyOrder->id);
-
-                if ($lockedBuyOrder && $lockedBuyOrder->status === OrderStatus::OPEN) {
-                    try {
-                        $this->fillOrder($lockedBuyOrder, $matchingSellOrder);
-                        $buyOrder->refresh();
-                    } catch (\Exception $e) {
-                        logger()->error('Failed to fill buy order', [
-                            'error' => $e->getMessage()
-                        ]);
-                    }
+                try {
+                    $matcher = app(OrderMatchingService::class, [
+                        'buyOrder' => $buyOrder,
+                        'sellOrder' => $matchingSellOrder,
+                    ]);
+                    $matcher->execute();
+                    $buyOrder->refresh();
+                } catch (\Exception $e) {
+                    logger()->error('Failed to fill buy order', [
+                        'error' => $e->getMessage(),
+                        'buy_order_id' => $buyOrder->id,
+                        'sell_order_id' => $matchingSellOrder->id,
+                    ]);
                 }
             }
 
             return $buyOrder;
         });
-    }
-
-    private function fillOrder(Order $buyOrder, Order $sellOrder): void
-    {
-        $lockedBuyOrder = Order::lockForUpdate()->find($buyOrder->id);
-        $lockedSellOrder = Order::lockForUpdate()->find($sellOrder->id);
-
-        if (!$lockedBuyOrder || !$lockedSellOrder) {
-            throw new \Exception('Order not found');
-        }
-
-        if ($lockedBuyOrder->status !== OrderStatus::OPEN ||
-            $lockedSellOrder->status !== OrderStatus::OPEN) {
-            throw new \Exception('Order cannot be filled - status changed');
-        }
-
-        if ($lockedBuyOrder->price < $lockedSellOrder->price) {
-            throw new \Exception('Orders cannot match - buy price is less than sell price');
-        }
-
-        // Trade executes at sell order price (price-time priority)
-        $executionPrice = $lockedSellOrder->price;
-        $executionAmount = min($lockedBuyOrder->amount, $lockedSellOrder->amount);
-        $totalValue = $executionPrice * $executionAmount;
-        $commission = 0.015 * $totalValue; // 1.5% commission
-
-        // Lock both users for balance updates
-        $buyer = User::lockForUpdate()->find($lockedBuyOrder->user_id);
-        $seller = User::lockForUpdate()->find($lockedSellOrder->user_id);
-
-        if (!$buyer || !$seller) {
-            throw new \Exception('User not found');
-        }
-
-        $buyerPaid = $lockedBuyOrder->price * $lockedBuyOrder->amount;
-        $buyerShouldPayForExecution = ($executionPrice * $executionAmount) + $commission;
-
-        $buyerRefund = $buyerPaid - $buyerShouldPayForExecution;
-
-        if ($buyerRefund > 0) {
-            $buyer->balance += $buyerRefund;
-        } elseif ($buyerRefund < 0) {
-            $additionalPaymentNeeded = abs($buyerRefund);
-            if ($buyer->balance < $additionalPaymentNeeded) {
-                throw new \Exception('Insufficient balance for trade execution and commission');
-            }
-            $buyer->balance -= $additionalPaymentNeeded;
-        }
-        $buyer->save();
-
-        $seller->balance += $totalValue;
-        $seller->save();
-
-        $lockedBuyOrder->status = OrderStatus::FILLED;
-        $lockedBuyOrder->save();
-        $lockedSellOrder->status = OrderStatus::FILLED;
-        $lockedSellOrder->save();
-
-        $buyerAsset = Asset::query()
-            ->where(['symbol' => $lockedBuyOrder->symbol, 'user_id' => $lockedBuyOrder->user_id])
-            ->lockForUpdate()
-            ->first();
-
-        if (!$buyerAsset) {
-            Asset::query()->create([
-                'symbol' => $lockedBuyOrder->symbol,
-                'user_id' => $lockedBuyOrder->user_id,
-                'amount' => $executionAmount,
-                'locked_amount' => 0,
-            ]);
-        } else {
-            $buyerAsset->amount += $executionAmount;
-            $buyerAsset->save();
-        }
-
-        $sellerAsset = Asset::query()
-            ->where(['symbol' => $lockedSellOrder->symbol, 'user_id' => $lockedSellOrder->user_id])
-            ->lockForUpdate()
-            ->first();
-
-        if ($sellerAsset) {
-            $sellerAsset->locked_amount -= $executionAmount;
-            $sellerAsset->save();
-        }
-
-        event(new OrderMatched($lockedBuyOrder, $lockedSellOrder, $executionPrice, $executionAmount, $commission));
     }
 
     private function sellOrder(CreateLimitOrderDTO $dto): Order
@@ -216,19 +128,20 @@ class OrderService
                 ->first();
 
             if ($matchingBuyOrder) {
-                $lockedSellOrder = Order::lockForUpdate()->find($sellOrder->id);
-                if ($lockedSellOrder && $lockedSellOrder->status === OrderStatus::OPEN) {
-                    try {
-                        $this->fillOrder($matchingBuyOrder, $lockedSellOrder);
-                        $sellOrder->refresh();
-                    } catch (\Exception $e) {
-                       logger()->error('Failed to fill sell order', [
-                           'error' => $e->getMessage(),
-                           'buy_order_id' => $matchingBuyOrder->id,
-                           'sell_order_id' => $sellOrder->id,
-                           'trace' => $e->getTraceAsString()
-                       ]);
-                    }
+                try {
+                    $matcher = app(OrderMatchingService::class, [
+                        'buyOrder' => $matchingBuyOrder,
+                        'sellOrder' => $sellOrder,
+                    ]);
+                    $matcher->execute();
+                    $sellOrder->refresh();
+                } catch (\Exception $e) {
+                    logger()->error('Failed to fill sell order', [
+                        'error' => $e->getMessage(),
+                        'buy_order_id' => $matchingBuyOrder->id,
+                        'sell_order_id' => $sellOrder->id,
+                        'trace' => $e->getTraceAsString()
+                    ]);
                 }
             }
 
