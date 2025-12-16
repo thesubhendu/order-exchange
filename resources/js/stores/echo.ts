@@ -49,19 +49,41 @@ export const useEchoStore = defineStore('echo', () => {
         // Subscribe to private user channel
         const userId = authStore.user.id;
         userChannel.value = echo.value.private(`user.${userId}`);
+        
+        // Log when channel is subscribed
+        userChannel.value.subscribed(() => {
+            console.log('Subscribed to user channel:', `user.${userId}`);
+        });
+        
+        // Log subscription errors
+        userChannel.value.error((error: any) => {
+            console.error('Error subscribing to user channel:', error);
+        });
 
         // Listen for order matched events
         userChannel.value.listen('.order.matched', (data: any) => {
+            console.log('Order matched event received:', data);
             window.dispatchEvent(new CustomEvent('order-matched', { detail: data }));
         });
 
         // Listen for order cancelled events
         userChannel.value.listen('.order.cancelled', (data: any) => {
+            console.log('Order cancelled event received:', data);
             window.dispatchEvent(new CustomEvent('order-cancelled', { detail: data }));
         });
 
         // Subscribe to public orderbook channel for real-time updates
         orderbookChannel.value = echo.value.channel('orderbook');
+        
+        // Log when orderbook channel is subscribed
+        orderbookChannel.value.subscribed(() => {
+            console.log('Subscribed to orderbook channel');
+        });
+        
+        // Log subscription errors
+        orderbookChannel.value.error((error: any) => {
+            console.error('Error subscribing to orderbook channel:', error);
+        });
 
         // Listen for order created events (affects orderbook)
         orderbookChannel.value.listen('.order.created', (data: any) => {
@@ -75,6 +97,7 @@ export const useEchoStore = defineStore('echo', () => {
 
         // Listen for order matched events (affects orderbook)
         orderbookChannel.value.listen('.order.matched', (data: any) => {
+            console.log('Order matched event received on orderbook channel:', data);
             window.dispatchEvent(new CustomEvent('orderbook-updated', { detail: data }));
         });
     }

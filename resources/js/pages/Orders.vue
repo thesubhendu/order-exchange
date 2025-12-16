@@ -231,6 +231,7 @@ async function cancelOrder(orderId: number) {
 }
 
 function handleOrderMatched(event: CustomEvent) {
+    console.log('handleOrderMatched called with data:', event.detail);
     // Refresh data when order is matched
     loadProfile();
     loadOrderbook();
