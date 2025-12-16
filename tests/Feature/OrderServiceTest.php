@@ -146,7 +146,6 @@ test('can fulfill order', function () {
     $this->assertEquals($sellingAsset->fresh()->amount, 998);
 
     $sellingPrice = 100*2;
-    $commission = $sellingPrice*0.015;
-
-    $this->assertEquals($seller->fresh()->balance, $sellerInitialBalance-$commission);
+    // Seller receives full sale proceeds (commission is deducted from buyer, not seller)
+    $this->assertEquals($seller->fresh()->balance, $sellerInitialBalance + $sellingPrice);
 });

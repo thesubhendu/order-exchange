@@ -67,14 +67,15 @@ class OrderService
             // Broadcast order created event
             event(new OrderCreated($buyOrder));
 
+            // Find matching sell orders (sell price <= buy price, sorted by price ascending then oldest first)
             $matchingSellOrder = Order::open()
                 ->where('symbol', $dto->symbol)
                 ->where('side', OrderSide::SELL)
                 ->where('price', '<=', $dto->price)
-                ->oldest()
+                ->orderBy('price', 'asc')
+                ->orderBy('created_at', 'asc')
                 ->lockForUpdate()
                 ->first();
-
 
             if ($matchingSellOrder) {
                 $lockedBuyOrder = Order::lockForUpdate()->find($buyOrder->id);
@@ -84,7 +85,14 @@ class OrderService
                         $this->fillOrder($lockedBuyOrder, $matchingSellOrder);
                         $buyOrder->refresh();
                     } catch (\Exception $e) {
-                        logger()->error('Failed to fill order', ['error' => $e->getMessage()]);
+                        logger()->error('Failed to fill buy order', [
+                            'error' => $e->getMessage(),
+                            'buy_order_id' => $buyOrder->id,
+                            'sell_order_id' => $matchingSellOrder->id,
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                        // Re-throw to see the error, but this might break the transaction
+                        // For now, we'll log and continue
                     }
                 }
             }
@@ -95,7 +103,6 @@ class OrderService
 
     private function fillOrder(Order $buyOrder, Order $sellOrder): void
     {
-        // Note: This is called within a transaction, so no nested transaction needed
         $lockedBuyOrder = Order::lockForUpdate()->find($buyOrder->id);
         $lockedSellOrder = Order::lockForUpdate()->find($sellOrder->id);
 
@@ -108,9 +115,14 @@ class OrderService
             throw new \Exception('Order cannot be filled - status changed');
         }
 
+        // Validate that orders can match (buy price >= sell price)
+        if ($lockedBuyOrder->price < $lockedSellOrder->price) {
+            throw new \Exception('Orders cannot match - buy price is less than sell price');
+        }
+
         // Trade executes at sell order price (price-time priority)
         $executionPrice = $lockedSellOrder->price;
-        $executionAmount = $lockedSellOrder->amount;
+        $executionAmount = min($lockedBuyOrder->amount, $lockedSellOrder->amount);
         $totalValue = $executionPrice * $executionAmount;
         $commission = 0.015 * $totalValue; // 1.5% commission
 
@@ -122,19 +134,26 @@ class OrderService
             throw new \Exception('User not found');
         }
 
-        // Buyer: Already paid buyOrder.price * amount, but trade executes at sellOrder.price
-        // Commission is deducted from buyer (as per requirements)
-        // Refund the difference: (buyOrder.price - sellOrder.price) * amount, minus commission
+        // Buyer: Already paid buyOrder.price * buyOrder.amount when order was created
+        // Trade executes at sellOrder.price, and commission is deducted from buyer
+        // Calculate what buyer actually needs to pay for the execution amount
         $buyerPaid = $lockedBuyOrder->price * $lockedBuyOrder->amount;
-        $buyerShouldPay = $totalValue + $commission; // Pay execution price + commission
-        $buyerRefund = $buyerPaid - $buyerShouldPay;
+        $buyerShouldPayForExecution = ($executionPrice * $executionAmount) + $commission;
+        // Calculate refund (positive) or additional payment needed (negative)
+        $buyerRefund = $buyerPaid - $buyerShouldPayForExecution;
         
         if ($buyerRefund > 0) {
+            // Buyer paid more than needed, refund the difference
             $buyer->balance += $buyerRefund;
         } elseif ($buyerRefund < 0) {
-            // This shouldn't happen if validation is correct, but handle it
-            throw new \Exception('Insufficient balance for trade execution');
+            // Buyer needs to pay more (e.g., commission), check they have enough balance
+            $additionalPaymentNeeded = abs($buyerRefund);
+            if ($buyer->balance < $additionalPaymentNeeded) {
+                throw new \Exception('Insufficient balance for trade execution and commission');
+            }
+            $buyer->balance -= $additionalPaymentNeeded;
         }
+        // If buyerRefund == 0, no balance change needed
         $buyer->save();
 
         // Seller: Receive full sale proceeds (commission already deducted from buyer)
@@ -208,14 +227,15 @@ class OrderService
             // Broadcast order created event
             event(new OrderCreated($sellOrder));
 
+            // Find matching buy orders (buy price >= sell price, sorted by price descending then oldest first)
             $matchingBuyOrder = Order::open()
                 ->where('symbol', $dto->symbol)
                 ->where('side', OrderSide::BUY)
                 ->where('price', '>=', $dto->price)
-                ->oldest()
+                ->orderBy('price', 'desc')
+                ->orderBy('created_at', 'asc')
                 ->lockForUpdate()
                 ->first();
-
 
             if ($matchingBuyOrder) {
                 $lockedSellOrder = Order::lockForUpdate()->find($sellOrder->id);
@@ -224,7 +244,12 @@ class OrderService
                         $this->fillOrder($matchingBuyOrder, $lockedSellOrder);
                         $sellOrder->refresh();
                     } catch (\Exception $e) {
-                       logger()->error('Failed to fill order', ['error' => $e->getMessage()]);
+                       logger()->error('Failed to fill sell order', [
+                           'error' => $e->getMessage(),
+                           'buy_order_id' => $matchingBuyOrder->id,
+                           'sell_order_id' => $sellOrder->id,
+                           'trace' => $e->getTraceAsString()
+                       ]);
                     }
                 }
             }
