@@ -16,7 +16,8 @@ window.Pusher = Pusher;
 
 export const useEchoStore = defineStore('echo', () => {
     const echo = ref<Echo | null>(null);
-    const channel = ref<any>(null);
+    const userChannel = ref<any>(null);
+    const orderbookChannel = ref<any>(null);
 
     function initialize() {
         if (echo.value) {
@@ -47,23 +48,53 @@ export const useEchoStore = defineStore('echo', () => {
 
         // Subscribe to private user channel
         const userId = authStore.user.id;
-        channel.value = echo.value.private(`user.${userId}`);
+        userChannel.value = echo.value.private(`user.${userId}`);
 
         // Listen for order matched events
-        channel.value.listen('.order.matched', (data: any) => {
-            // Emit custom event that components can listen to
+        userChannel.value.listen('.order.matched', (data: any) => {
             window.dispatchEvent(new CustomEvent('order-matched', { detail: data }));
+        });
+
+        // Listen for order cancelled events
+        userChannel.value.listen('.order.cancelled', (data: any) => {
+            window.dispatchEvent(new CustomEvent('order-cancelled', { detail: data }));
+        });
+
+        // Subscribe to public orderbook channel for real-time updates
+        orderbookChannel.value = echo.value.channel('orderbook');
+
+        // Listen for order created events (affects orderbook)
+        orderbookChannel.value.listen('.order.created', (data: any) => {
+            window.dispatchEvent(new CustomEvent('orderbook-updated', { detail: data }));
+        });
+
+        // Listen for order cancelled events (affects orderbook)
+        orderbookChannel.value.listen('.order.cancelled', (data: any) => {
+            window.dispatchEvent(new CustomEvent('orderbook-updated', { detail: data }));
+        });
+
+        // Listen for order matched events (affects orderbook)
+        orderbookChannel.value.listen('.order.matched', (data: any) => {
+            window.dispatchEvent(new CustomEvent('orderbook-updated', { detail: data }));
         });
     }
 
     function disconnect() {
-        if (channel.value) {
-            channel.value.stopListening('.order.matched');
+        if (userChannel.value) {
+            userChannel.value.stopListening('.order.matched');
+            userChannel.value.stopListening('.order.cancelled');
             const authStore = useAuthStore();
             if (authStore.user) {
                 echo.value?.leave(`user.${authStore.user.id}`);
             }
-            channel.value = null;
+            userChannel.value = null;
+        }
+        if (orderbookChannel.value) {
+            orderbookChannel.value.stopListening('.order.created');
+            orderbookChannel.value.stopListening('.order.cancelled');
+            orderbookChannel.value.stopListening('.order.matched');
+            echo.value?.leave('orderbook');
+            orderbookChannel.value = null;
         }
         if (echo.value) {
             echo.value.disconnect();
@@ -73,7 +104,8 @@ export const useEchoStore = defineStore('echo', () => {
 
     return {
         echo,
-        channel,
+        userChannel,
+        orderbookChannel,
         initialize,
         disconnect,
     };

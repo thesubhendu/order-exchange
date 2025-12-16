@@ -127,8 +127,8 @@
                                     <span class="font-semibold text-gray-900 dark:text-white">{{ order.symbol }}</span>
                                     <span
                                         :class="[
-                                            order.status === 'filled' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' :
-                                            order.status === 'cancelled' ? 'bg-gray-100 text-gray-800 dark:bg-gray-600 dark:text-gray-200' :
+                                            order.status === 2 ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' :
+                                            order.status === 3 ? 'bg-gray-100 text-gray-800 dark:bg-gray-600 dark:text-gray-200' :
                                             'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
                                             'px-2 py-1 rounded text-xs font-semibold'
                                         ]"
@@ -141,12 +141,13 @@
                                 </div>
                             </div>
                             <button
-                                v-if="order.status === 'open'"
+                                v-if="order.status === 1"
                                 @click="cancelOrder(order.id)"
                                 :disabled="cancellingOrderId === order.id"
-                                class="ml-4 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-50"
+                                class="ml-4 px-3 py-1 text-sm font-medium text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-800 rounded-md disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                             >
-                                Cancel
+                                <span v-if="cancellingOrderId === order.id">Cancelling...</span>
+                                <span v-else>Cancel</span>
                             </button>
                         </div>
                         <div v-if="myOrders.length === 0" class="text-gray-500 text-sm text-center py-4">
@@ -163,10 +164,12 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import { useEchoStore } from '../stores/echo';
 import api from '../api/client';
 
 const router = useRouter();
 const authStore = useAuthStore();
+const echoStore = useEchoStore();
 
 const profile = ref<any>(null);
 const orderbook = ref<any[]>([]);
@@ -218,6 +221,7 @@ async function cancelOrder(orderId: number) {
     cancellingOrderId.value = orderId;
     try {
         await api.post(`/orders/${orderId}/cancel`);
+        // Real-time updates will handle the refresh via events
         await Promise.all([loadProfile(), loadOrderbook(), loadMyOrders()]);
     } catch (error: any) {
         alert(error.response?.data?.error || 'Failed to cancel order');
@@ -233,31 +237,40 @@ function handleOrderMatched(event: CustomEvent) {
     loadMyOrders();
 }
 
+function handleOrderCancelled(event: CustomEvent) {
+    // Refresh data when order is cancelled
+    loadProfile();
+    loadOrderbook();
+    loadMyOrders();
+}
+
+function handleOrderbookUpdated(event: CustomEvent) {
+    // Refresh orderbook when it's updated
+    loadOrderbook();
+}
+
 async function handleLogout() {
     await authStore.logout();
     router.push('/login');
 }
 
-let interval: number | null = null;
-
 onMounted(async () => {
+    // Initialize Echo store for real-time updates
+    echoStore.initialize();
+    
+    // Load initial data
     await Promise.all([loadProfile(), loadOrderbook(), loadMyOrders()]);
     
-    // Listen for order matched events
+    // Listen for real-time events
     window.addEventListener('order-matched', handleOrderMatched as EventListener);
-    
-    // Poll for updates every 5 seconds
-    interval = window.setInterval(() => {
-        loadProfile();
-        loadOrderbook();
-        loadMyOrders();
-    }, 5000);
+    window.addEventListener('order-cancelled', handleOrderCancelled as EventListener);
+    window.addEventListener('orderbook-updated', handleOrderbookUpdated as EventListener);
 });
 
 onUnmounted(() => {
-    if (interval !== null) {
-        clearInterval(interval);
-    }
+    // Remove event listeners
     window.removeEventListener('order-matched', handleOrderMatched as EventListener);
+    window.removeEventListener('order-cancelled', handleOrderCancelled as EventListener);
+    window.removeEventListener('orderbook-updated', handleOrderbookUpdated as EventListener);
 });
 </script>

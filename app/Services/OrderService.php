@@ -9,6 +9,8 @@ use App\Enums\OrderStatus;
 use App\DTOs\CreateLimitOrderDTO;
 use App\Models\User;
 use App\Events\OrderMatched;
+use App\Events\OrderCreated;
+use App\Events\OrderCancelled;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -61,6 +63,9 @@ class OrderService
             $user->save();
 
             $buyOrder = Order::create($dto->toArray() + ['status' => OrderStatus::OPEN]);
+
+            // Broadcast order created event
+            event(new OrderCreated($buyOrder));
 
             $matchingSellOrder = Order::open()
                 ->where('symbol', $dto->symbol)
@@ -200,6 +205,9 @@ class OrderService
 
             $sellOrder = Order::create($dto->toArray() + ['status' => OrderStatus::OPEN]);
 
+            // Broadcast order created event
+            event(new OrderCreated($sellOrder));
+
             $matchingBuyOrder = Order::open()
                 ->where('symbol', $dto->symbol)
                 ->where('side', OrderSide::BUY)
@@ -238,6 +246,9 @@ class OrderService
             }
             $order->status = OrderStatus::CANCELLED;
             $order->save();
+
+            // Broadcast order cancelled event
+            event(new OrderCancelled($order));
 
             if($order->side === OrderSide::BUY) {
                 $buyer = User::lockForUpdate()->find($order->user_id);
