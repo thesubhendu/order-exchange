@@ -8,7 +8,6 @@ export default defineConfig({
     plugins: [
         laravel({
             input: ['resources/js/api-app.ts'],
-            ssr: 'resources/js/ssr.ts',
             refresh: true,
         }),
         tailwindcss(),
