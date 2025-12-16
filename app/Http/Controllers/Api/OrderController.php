@@ -8,6 +8,7 @@ use App\Enums\Symbol;
 use App\Models\Order;
 use App\Services\OrderService;
 use App\Http\Controllers\Controller;
+use App\Http\Resources\OrderResource;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -29,7 +30,7 @@ class OrderController extends Controller
             $orders = $this->orderService->getOpenOrders($validated['symbol'] ?? null);
             
             return response()->json([
-                'orders' => $orders,
+                'orders' => OrderResource::collection($orders),
                 'message' => 'Orders fetched successfully',
             ], 200);
         } catch (\Exception $e) {
@@ -61,9 +62,10 @@ class OrderController extends Controller
             }
             $dto = CreateLimitOrderDTO::fromRequest($user, $validated);
             $order = $this->orderService->createLimitOrder($dto);
+            $order->load('user');
             
             return response()->json([
-                'order' => $order->load('user'),
+                'order' => new OrderResource($order),
                 'message' => 'Order created successfully',
             ], 201);
         } catch (\Exception $e) {
@@ -88,9 +90,10 @@ class OrderController extends Controller
             }
 
             $cancelledOrder = $this->orderService->cancelOrder($id);
+            $cancelledOrder->load('user');
             
             return response()->json([
-                'order' => $cancelledOrder->load('user'),
+                'order' => new OrderResource($cancelledOrder),
                 'message' => 'Order cancelled successfully',
             ], 200);
         } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
