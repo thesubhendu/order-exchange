@@ -5,7 +5,7 @@ import { createPinia } from 'pinia';
 import App from './App.vue';
 import router from './router';
 import { useAuthStore } from './stores/auth';
-import { usePusherStore } from './stores/pusher';
+import { useEchoStore } from './stores/echo';
 
 const app = createApp(App);
 const pinia = createPinia();
@@ -15,9 +15,9 @@ app.use(router);
 
 const authStore = useAuthStore();
 authStore.checkAuth().then(() => {
-    const pusherStore = usePusherStore();
+    const echoStore = useEchoStore();
     if (authStore.isAuthenticated) {
-        pusherStore.initialize();
+        echoStore.initialize();
     }
     
     app.mount('#app');

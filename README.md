@@ -1,13 +1,13 @@
 # Order Exchange - Limit Order Exchange Mini Engine
 
-A full-stack limit order exchange application built with Laravel (Backend API) and Vue.js (Frontend SPA). This project demonstrates financial data integrity, concurrency safety, scalable balance/asset management, and real-time order matching with Pusher broadcasting.
+A full-stack limit order exchange application built with Laravel (Backend API) and Vue.js (Frontend SPA). This project demonstrates financial data integrity, concurrency safety, scalable balance/asset management, and real-time order matching with Laravel Reverb broadcasting.
 
 ## 🛠 Technology Stack
 
 - **Backend:** Laravel (latest stable)
 - **Frontend:** Vue.js 3 (Composition API) + TypeScript
 - **Database:** MySQL/PostgreSQL
-- **Real-time:** Pusher via Laravel Broadcasting
+- **Real-time:** Laravel Reverb via Laravel Broadcasting
 - **State Management:** Pinia
 - **Routing:** Vue Router
 - **HTTP Client:** Axios
@@ -20,7 +20,7 @@ Before you begin, ensure you have the following installed:
 - Composer
 - Node.js >= 18.x and npm
 - MySQL/PostgreSQL
-- Pusher account (for real-time features)
+- Laravel Reverb (for real-time features)
 
 ## 🚀 Installation
 
@@ -76,30 +76,61 @@ Run migrations:
 php artisan migrate
 ```
 
-### 6. Pusher Configuration
+### 6. Seed Test Data (Optional)
 
-Get your Pusher credentials from [pusher.com](https://pusher.com) and add them to `.env`:
+To quickly test the application with pre-configured users, run the test data seeder:
 
-```env
-# Pusher Configuration
-PUSHER_APP_ID=your-pusher-app-id
-PUSHER_APP_KEY=your-pusher-app-key
-PUSHER_APP_SECRET=your-pusher-app-secret
-PUSHER_APP_CLUSTER=mt1
-
-# Broadcasting Driver
-BROADCAST_DRIVER=pusher
+```bash
+php artisan db:seed --class=TestDataSeeder
 ```
 
-Add frontend Pusher configuration (also in `.env`):
+This creates two test users:
+
+**Buyer Account:**
+- Email: `buyer@test.test`
+- Password: `password`
+- USD Balance: $100,000
+- Use this account to test purchasing BTC or ETH
+
+**Seller Account:**
+- Email: `seller@test.test`
+- Password: `password`
+- USD Balance: $50,000
+- Assets: 10 BTC, 100 ETH
+- Use this account to test selling BTC or ETH
+
+You can log in with either account to test order creation and matching functionality.
+
+### 7. Laravel Reverb Configuration
+
+Configure Laravel Reverb for real-time broadcasting. Add to `.env`:
 
 ```env
-VITE_PUSHER_APP_KEY=your-pusher-app-key
-VITE_PUSHER_APP_CLUSTER=mt1
+# Laravel Reverb Configuration
+REVERB_APP_ID=your-reverb-app-id
+REVERB_APP_KEY=your-reverb-app-key
+REVERB_APP_SECRET=your-reverb-app-secret
+REVERB_HOST=localhost
+REVERB_PORT=8080
+REVERB_SCHEME=http
+
+# Broadcasting Driver
+BROADCAST_CONNECTION=reverb
+```
+
+Add frontend Reverb configuration (also in `.env`):
+
+```env
+VITE_REVERB_APP_KEY=your-reverb-app-key
+VITE_REVERB_HOST=localhost
+VITE_REVERB_PORT=8080
+VITE_REVERB_SCHEME=http
 VITE_API_URL=/api
 ```
 
-### 7. Build Frontend Assets
+**Note:** For production, update `REVERB_HOST`, `REVERB_PORT`, and `REVERB_SCHEME` accordingly.
+
+### 8. Build Frontend Assets
 
 For development:
 
@@ -123,7 +154,13 @@ Start Laravel development server:
 php artisan serve
 ```
 
-In another terminal, start Vite dev server (if using `npm run dev`):
+In another terminal, start Laravel Reverb server:
+
+```bash
+php artisan reverb:start
+```
+
+In a third terminal, start Vite dev server (if using `npm run dev`):
 
 ```bash
 npm run dev
@@ -132,6 +169,7 @@ npm run dev
 The application will be available at:
 - **Frontend:** http://localhost:8000
 - **API:** http://localhost:8000/api
+- **Reverb WebSocket:** ws://localhost:8080
 
 ### Production Mode
 
@@ -161,7 +199,7 @@ php artisan serve
 | `GET` | `/api/orders/my` | Get user's orders (all statuses) |
 | `POST` | `/api/orders` | Create limit order |
 | `POST` | `/api/orders/{id}/cancel` | Cancel an order |
-| `POST` | `/api/broadcasting/auth` | Pusher authentication |
+| `POST` | `/api/broadcasting/auth` | Reverb authentication |
 
 ### Request/Response Examples
 
@@ -230,11 +268,13 @@ Content-Type: application/json
 
 ### Real-time Updates
 
-- **Event:** `OrderMatched` broadcasted via Pusher
-- **Channels:** `private-user.{buyer_id}` and `private-user.{seller_id}`
-- **Fallback:** Polling every 5 seconds if Pusher unavailable
+- **Event:** `OrderMatched` broadcasted via Laravel Reverb
+- **Channels:** `user.{buyer_id}` and `user.{seller_id}` (private channels)
+- **Fallback:** Polling every 5 seconds if Reverb unavailable
 
 ## 🧪 Testing
+
+### Running Tests
 
 Run PHP tests:
 
@@ -248,6 +288,30 @@ Run specific test suite:
 php artisan test --testsuite=Feature
 ```
 
+### Testing with Seed Data
+
+For manual testing, you can use the test users created by the `TestDataSeeder`:
+
+1. **Seed the test data:**
+   ```bash
+   php artisan db:seed --class=TestDataSeeder
+   ```
+
+2. **Login as Buyer:**
+   - Email: `buyer@test.test`
+   - Password: `password`
+   - Create buy orders to purchase BTC or ETH from the seller
+
+3. **Login as Seller:**
+   - Email: `seller@test.test`
+   - Password: `password`
+   - Create sell orders to sell BTC or ETH to buyers
+
+4. **Test Order Matching:**
+   - Create a sell order as the seller (e.g., sell 0.1 BTC at $95,000)
+   - Create a matching buy order as the buyer (e.g., buy 0.1 BTC at $95,000 or higher)
+   - The orders should match automatically and both users' balances/assets will update
+
 ## 🔒 Security Features
 
 - **Authentication:** Laravel Sanctum token-based auth
@@ -258,12 +322,13 @@ php artisan test --testsuite=Feature
 
 ## 🐛 Troubleshooting
 
-### Pusher Not Working
+### Reverb Not Working
 
-1. Verify Pusher credentials in `.env`
-2. Check `BROADCAST_DRIVER=pusher`
-3. Verify channel authorization in browser console
-4. Check Laravel logs: `storage/logs/laravel.log`
+1. Verify Reverb credentials in `.env`
+2. Check `BROADCAST_CONNECTION=reverb`
+3. Ensure Reverb server is running: `php artisan reverb:start`
+4. Verify channel authorization in browser console
+5. Check Laravel logs: `storage/logs/laravel.log`
 
 ### API Calls Failing
 
@@ -274,10 +339,12 @@ php artisan test --testsuite=Feature
 
 ### Real-time Updates Not Showing
 
-1. Check Pusher connection in browser console
-2. Verify channel subscription
-3. Check Laravel broadcasting logs
-4. Ensure user is authenticated
+1. Ensure Reverb server is running: `php artisan reverb:start`
+2. Check Reverb connection in browser console
+3. Verify channel subscription
+4. Check Laravel broadcasting logs
+5. Ensure user is authenticated
+6. Verify WebSocket connection (check browser Network tab)
 
 ### Frontend Build Issues
 
@@ -311,7 +378,7 @@ php artisan test --testsuite=Feature
 
 - [Laravel Documentation](https://laravel.com/docs)
 - [Vue.js Documentation](https://vuejs.org/)
-- [Pusher Documentation](https://pusher.com/docs)
+- [Laravel Reverb Documentation](https://laravel.com/docs/reverb)
 - [Pinia Documentation](https://pinia.vuejs.org/)
 
 ## 📄 License
