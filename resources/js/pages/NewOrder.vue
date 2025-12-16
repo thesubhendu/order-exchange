@@ -155,10 +155,9 @@ async function handleSubmit() {
             amount: null,
         };
 
-        // Redirect to orders page after a short delay
         setTimeout(() => {
             router.push('/');
-        }, 1500);
+        }, 500);
     } catch (err: any) {
         error.value = err.response?.data?.error || err.response?.data?.message || 'Failed to place order';
     } finally {
