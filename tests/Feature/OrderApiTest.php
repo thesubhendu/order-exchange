@@ -384,7 +384,22 @@ test('buy order can be fulfilled when matching sell order exists', function () {
     $this->assertEqualsWithDelta(0, (float) $sellerAsset->locked_amount, 0.00000001);
 });
 
-test('profile endpoint returns authenticated user', function () {
+test('profile endpoint returns authenticated user with balances', function () {
+    // Create some assets for the user
+    Asset::factory()->create([
+        'user_id' => $this->user->id,
+        'symbol' => Symbol::BTC->value,
+        'amount' => 10.5,
+        'locked_amount' => 2.0,
+    ]);
+    
+    Asset::factory()->create([
+        'user_id' => $this->user->id,
+        'symbol' => Symbol::ETH->value,
+        'amount' => 5.25,
+        'locked_amount' => 0,
+    ]);
+    
     $response = $this->withHeader('Authorization', 'Bearer ' . $this->token)
         ->getJson('/api/profile');
     
@@ -394,7 +409,19 @@ test('profile endpoint returns authenticated user', function () {
                 'id',
                 'name',
                 'email',
+                'usd_balance',
+                'assets' => [
+                    '*' => [
+                        'id',
+                        'symbol',
+                        'amount',
+                        'locked_amount',
+                        'available_amount',
+                    ],
+                ],
             ],
         ])
-        ->assertJsonPath('user.id', $this->user->id);
+        ->assertJsonPath('user.id', $this->user->id)
+        ->assertJsonPath('user.usd_balance', '10000.00')
+        ->assertJsonCount(2, 'user.assets');
 });
