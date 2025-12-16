@@ -2,13 +2,16 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\DTOs\CreateLimitOrderDTO;
+use App\Enums\OrderSide;
+use App\Enums\Symbol;
+use App\Models\Order;
+use App\Services\OrderService;
+use App\Http\Controllers\Controller;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
-use App\Services\OrderService;
-use App\DTOs\CreateLimitOrderDTO;
-use App\Enums\Symbol;
-use App\Enums\OrderSide;
-use App\Http\Controllers\Controller;
+use Illuminate\Validation\ValidationException;
 
 class OrderController extends Controller
 {
@@ -16,36 +19,90 @@ class OrderController extends Controller
     {
     }
    
-    public function index(Request $request)
+    public function index(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'symbol' => ['nullable', Rule::in(Symbol::values())],
         ]);
 
-        $orders = $this->orderService->getOpenOrders($validated['symbol']??null);
-        return response()->json(['orders' => $orders, 'message' => 'Orders fetched successfully'], 200);
+        try {
+            $orders = $this->orderService->getOpenOrders($validated['symbol'] ?? null);
+            
+            return response()->json([
+                'orders' => $orders,
+                'message' => 'Orders fetched successfully',
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Failed to fetch orders',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
     }
 
    
-    public function store(Request $request)
+    public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'symbol' => ['required', Rule::in(Symbol::values())],
             'side' => ['required', Rule::in(OrderSide::values())],
-            'price' => ['required', 'numeric'],
-            'amount' => ['required', 'numeric'],
+            'price' => ['required', 'numeric', 'min:0.01'],
+            'amount' => ['required', 'numeric', 'min:0.01'],
         ]);
 
-        $dto = CreateLimitOrderDTO::fromRequest($request->user(), $validated);
-        $order = $this->orderService->createLimitOrder($dto);
-        
-        return response()->json(['order' => $order, 'message' => 'Order created successfully'], 201);
+        try {
+            $user = $request->user();
+            // Ensure we're using the correct authenticated user
+            if (!$user) {
+                return response()->json([
+                    'message' => 'Unauthenticated',
+                    'error' => 'User not authenticated',
+                ], 401);
+            }
+            $dto = CreateLimitOrderDTO::fromRequest($user, $validated);
+            $order = $this->orderService->createLimitOrder($dto);
+            
+            return response()->json([
+                'order' => $order->load('user'),
+                'message' => 'Order created successfully',
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Failed to create order',
+                'error' => $e->getMessage(),
+            ], 422);
+        }
     }
 
   
-    public function cancel(string $id)
+    public function cancel(Request $request, string $id): JsonResponse
     {
-        $order = $this->orderService->cancelOrder($id);
-        return response()->json(['order' => $order, 'message' => 'Order cancelled successfully'], 200);
+        try {
+            $order = Order::findOrFail($id);
+            
+            if ($order->user_id !== $request->user()->id) {
+                return response()->json([
+                    'message' => 'Unauthorized',
+                    'error' => 'You can only cancel your own orders',
+                ], 403);
+            }
+
+            $cancelledOrder = $this->orderService->cancelOrder($id);
+            
+            return response()->json([
+                'order' => $cancelledOrder->load('user'),
+                'message' => 'Order cancelled successfully',
+            ], 200);
+        } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
+            return response()->json([
+                'message' => 'Order not found',
+                'error' => 'The requested order does not exist',
+            ], 404);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Failed to cancel order',
+                'error' => $e->getMessage(),
+            ], 422);
+        }
     }
 }

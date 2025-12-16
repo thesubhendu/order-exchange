@@ -132,6 +132,17 @@ class OrderService
                 $asset->amount += $lockedSellOrder->amount;
                 $asset->save();
             }
+
+            // Release locked amount from seller's asset
+            $sellerAsset = Asset::query()
+                ->where(['symbol' => $lockedSellOrder->symbol, 'user_id' => $lockedSellOrder->user_id])
+                ->lockForUpdate()
+                ->first();
+
+            if ($sellerAsset) {
+                $sellerAsset->locked_amount -= $lockedSellOrder->amount;
+                $sellerAsset->save();
+            }
         });
     }
 
