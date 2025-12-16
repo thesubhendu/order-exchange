@@ -77,6 +77,26 @@ class OrderController extends Controller
     }
 
   
+    public function myOrders(Request $request): JsonResponse
+    {
+        try {
+            $user = $request->user();
+            $orders = Order::where('user_id', $user->id)
+                ->orderBy('created_at', 'desc')
+                ->get();
+            
+            return response()->json([
+                'orders' => OrderResource::collection($orders),
+                'message' => 'Orders fetched successfully',
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Failed to fetch orders',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
     public function cancel(Request $request, string $id): JsonResponse
     {
         try {

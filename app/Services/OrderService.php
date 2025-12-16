@@ -8,6 +8,7 @@ use App\Enums\OrderSide;
 use App\Enums\OrderStatus;
 use App\DTOs\CreateLimitOrderDTO;
 use App\Models\User;
+use App\Events\OrderMatched;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -89,61 +90,89 @@ class OrderService
 
     private function fillOrder(Order $buyOrder, Order $sellOrder): void
     {
-        DB::transaction(function () use ($buyOrder, $sellOrder) {
-            $lockedBuyOrder = Order::lockForUpdate()->find($buyOrder->id);
-            $lockedSellOrder = Order::lockForUpdate()->find($sellOrder->id);
+        // Note: This is called within a transaction, so no nested transaction needed
+        $lockedBuyOrder = Order::lockForUpdate()->find($buyOrder->id);
+        $lockedSellOrder = Order::lockForUpdate()->find($sellOrder->id);
 
-            if (!$lockedBuyOrder || !$lockedSellOrder) {
-                throw new \Exception('Order not found');
-            }
+        if (!$lockedBuyOrder || !$lockedSellOrder) {
+            throw new \Exception('Order not found');
+        }
 
-            if ($lockedBuyOrder->status !== OrderStatus::OPEN ||
-                $lockedSellOrder->status !== OrderStatus::OPEN) {
-                throw new \Exception('Order cannot be filled - status changed');
-            }
+        if ($lockedBuyOrder->status !== OrderStatus::OPEN ||
+            $lockedSellOrder->status !== OrderStatus::OPEN) {
+            throw new \Exception('Order cannot be filled - status changed');
+        }
 
-            $lockedBuyOrder->status = OrderStatus::FILLED;
-            $lockedBuyOrder->save();
-            $lockedSellOrder->status = OrderStatus::FILLED;
-            $lockedSellOrder->save();
+        // Trade executes at sell order price (price-time priority)
+        $executionPrice = $lockedSellOrder->price;
+        $executionAmount = $lockedSellOrder->amount;
+        $totalValue = $executionPrice * $executionAmount;
+        $commission = 0.015 * $totalValue; // 1.5% commission
 
-            $totalSellingPrice = $lockedSellOrder->price * $lockedSellOrder->amount;
-            $commission = 0.015 * $totalSellingPrice;
+        // Lock both users for balance updates
+        $buyer = User::lockForUpdate()->find($lockedBuyOrder->user_id);
+        $seller = User::lockForUpdate()->find($lockedSellOrder->user_id);
 
-            $seller = User::lockForUpdate()->find($lockedSellOrder->user_id);
-            if (!$seller) {
-                throw new \Exception('Seller not found');
-            }
-            $seller->balance -= $commission;
-            $seller->save();
+        if (!$buyer || !$seller) {
+            throw new \Exception('User not found');
+        }
 
-            $asset = Asset::query()
-                ->where(['symbol' => $lockedBuyOrder->symbol, 'user_id' => $lockedBuyOrder->user_id])
-                ->lockForUpdate()
-                ->first();
+        // Buyer: Already paid buyOrder.price * amount, but trade executes at sellOrder.price
+        // Commission is deducted from buyer (as per requirements)
+        // Refund the difference: (buyOrder.price - sellOrder.price) * amount, minus commission
+        $buyerPaid = $lockedBuyOrder->price * $lockedBuyOrder->amount;
+        $buyerShouldPay = $totalValue + $commission; // Pay execution price + commission
+        $buyerRefund = $buyerPaid - $buyerShouldPay;
+        
+        if ($buyerRefund > 0) {
+            $buyer->balance += $buyerRefund;
+        } elseif ($buyerRefund < 0) {
+            // This shouldn't happen if validation is correct, but handle it
+            throw new \Exception('Insufficient balance for trade execution');
+        }
+        $buyer->save();
 
-            if (!$asset) {
-                Asset::query()->create([
-                    'symbol' => $lockedBuyOrder->symbol,
-                    'user_id' => $lockedBuyOrder->user_id,
-                    'amount' => $lockedSellOrder->amount,
-                ]);
-            } else {
-                $asset->amount += $lockedSellOrder->amount;
-                $asset->save();
-            }
+        // Seller: Receive full sale proceeds (commission already deducted from buyer)
+        $seller->balance += $totalValue;
+        $seller->save();
 
-            // Release locked amount from seller's asset
-            $sellerAsset = Asset::query()
-                ->where(['symbol' => $lockedSellOrder->symbol, 'user_id' => $lockedSellOrder->user_id])
-                ->lockForUpdate()
-                ->first();
+        // Update order statuses
+        $lockedBuyOrder->status = OrderStatus::FILLED;
+        $lockedBuyOrder->save();
+        $lockedSellOrder->status = OrderStatus::FILLED;
+        $lockedSellOrder->save();
 
-            if ($sellerAsset) {
-                $sellerAsset->locked_amount -= $lockedSellOrder->amount;
-                $sellerAsset->save();
-            }
-        });
+        // Give assets to buyer
+        $buyerAsset = Asset::query()
+            ->where(['symbol' => $lockedBuyOrder->symbol, 'user_id' => $lockedBuyOrder->user_id])
+            ->lockForUpdate()
+            ->first();
+
+        if (!$buyerAsset) {
+            Asset::query()->create([
+                'symbol' => $lockedBuyOrder->symbol,
+                'user_id' => $lockedBuyOrder->user_id,
+                'amount' => $executionAmount,
+                'locked_amount' => 0,
+            ]);
+        } else {
+            $buyerAsset->amount += $executionAmount;
+            $buyerAsset->save();
+        }
+
+        // Release locked amount from seller's asset
+        $sellerAsset = Asset::query()
+            ->where(['symbol' => $lockedSellOrder->symbol, 'user_id' => $lockedSellOrder->user_id])
+            ->lockForUpdate()
+            ->first();
+
+        if ($sellerAsset) {
+            $sellerAsset->locked_amount -= $executionAmount;
+            $sellerAsset->save();
+        }
+
+        // Broadcast OrderMatched event
+        event(new \App\Events\OrderMatched($lockedBuyOrder, $lockedSellOrder, $executionPrice, $executionAmount, $commission));
     }
 
     private function sellOrder(CreateLimitOrderDTO $dto): Order
@@ -159,7 +188,9 @@ class OrderService
                 throw new \Exception('Asset not found');
             }
 
-            if ($asset->amount < $dto->amount) {
+            // Check available amount (amount - locked_amount)
+            $availableAmount = $asset->amount - $asset->locked_amount;
+            if ($availableAmount < $dto->amount) {
                 throw new \Exception('Insufficient assets');
             }
 

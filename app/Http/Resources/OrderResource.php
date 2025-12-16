@@ -22,7 +22,11 @@ class OrderResource extends JsonResource
             'price' => (string) $this->price,
             'amount' => (string) $this->amount,
             'status' => $this->status->value,
-            'status_label' => $this->status->name,
+            'status_label' => match($this->status) {
+                \App\Enums\OrderStatus::OPEN => 'open',
+                \App\Enums\OrderStatus::FILLED => 'filled',
+                \App\Enums\OrderStatus::CANCELLED => 'cancelled',
+            },
             'created_at' => $this->created_at?->toISOString(),
             'updated_at' => $this->updated_at?->toISOString(),
             'user' => $this->whenLoaded('user', function () {
