@@ -64,10 +64,8 @@ class OrderService
 
             $buyOrder = Order::create($dto->toArray() + ['status' => OrderStatus::OPEN]);
 
-            // Broadcast order created event
             event(new OrderCreated($buyOrder));
 
-            // Find matching sell orders (sell price <= buy price, sorted by price ascending then oldest first)
             $matchingSellOrder = Order::open()
                 ->where('symbol', $dto->symbol)
                 ->where('side', OrderSide::SELL)
@@ -86,13 +84,8 @@ class OrderService
                         $buyOrder->refresh();
                     } catch (\Exception $e) {
                         logger()->error('Failed to fill buy order', [
-                            'error' => $e->getMessage(),
-                            'buy_order_id' => $buyOrder->id,
-                            'sell_order_id' => $matchingSellOrder->id,
-                            'trace' => $e->getTraceAsString()
+                            'error' => $e->getMessage()
                         ]);
-                        // Re-throw to see the error, but this might break the transaction
-                        // For now, we'll log and continue
                     }
                 }
             }
@@ -115,7 +108,6 @@ class OrderService
             throw new \Exception('Order cannot be filled - status changed');
         }
 
-        // Validate that orders can match (buy price >= sell price)
         if ($lockedBuyOrder->price < $lockedSellOrder->price) {
             throw new \Exception('Orders cannot match - buy price is less than sell price');
         }
@@ -134,39 +126,30 @@ class OrderService
             throw new \Exception('User not found');
         }
 
-        // Buyer: Already paid buyOrder.price * buyOrder.amount when order was created
-        // Trade executes at sellOrder.price, and commission is deducted from buyer
-        // Calculate what buyer actually needs to pay for the execution amount
         $buyerPaid = $lockedBuyOrder->price * $lockedBuyOrder->amount;
         $buyerShouldPayForExecution = ($executionPrice * $executionAmount) + $commission;
-        // Calculate refund (positive) or additional payment needed (negative)
+
         $buyerRefund = $buyerPaid - $buyerShouldPayForExecution;
-        
+
         if ($buyerRefund > 0) {
-            // Buyer paid more than needed, refund the difference
             $buyer->balance += $buyerRefund;
         } elseif ($buyerRefund < 0) {
-            // Buyer needs to pay more (e.g., commission), check they have enough balance
             $additionalPaymentNeeded = abs($buyerRefund);
             if ($buyer->balance < $additionalPaymentNeeded) {
                 throw new \Exception('Insufficient balance for trade execution and commission');
             }
             $buyer->balance -= $additionalPaymentNeeded;
         }
-        // If buyerRefund == 0, no balance change needed
         $buyer->save();
 
-        // Seller: Receive full sale proceeds (commission already deducted from buyer)
         $seller->balance += $totalValue;
         $seller->save();
 
-        // Update order statuses
         $lockedBuyOrder->status = OrderStatus::FILLED;
         $lockedBuyOrder->save();
         $lockedSellOrder->status = OrderStatus::FILLED;
         $lockedSellOrder->save();
 
-        // Give assets to buyer
         $buyerAsset = Asset::query()
             ->where(['symbol' => $lockedBuyOrder->symbol, 'user_id' => $lockedBuyOrder->user_id])
             ->lockForUpdate()
@@ -184,7 +167,6 @@ class OrderService
             $buyerAsset->save();
         }
 
-        // Release locked amount from seller's asset
         $sellerAsset = Asset::query()
             ->where(['symbol' => $lockedSellOrder->symbol, 'user_id' => $lockedSellOrder->user_id])
             ->lockForUpdate()
@@ -195,8 +177,7 @@ class OrderService
             $sellerAsset->save();
         }
 
-        // Broadcast OrderMatched event
-        event(new \App\Events\OrderMatched($lockedBuyOrder, $lockedSellOrder, $executionPrice, $executionAmount, $commission));
+        event(new OrderMatched($lockedBuyOrder, $lockedSellOrder, $executionPrice, $executionAmount, $commission));
     }
 
     private function sellOrder(CreateLimitOrderDTO $dto): Order
@@ -212,7 +193,6 @@ class OrderService
                 throw new \Exception('Asset not found');
             }
 
-            // Check available amount (amount - locked_amount)
             $availableAmount = $asset->amount - $asset->locked_amount;
             if ($availableAmount < $dto->amount) {
                 throw new \Exception('Insufficient assets');
@@ -224,10 +204,8 @@ class OrderService
 
             $sellOrder = Order::create($dto->toArray() + ['status' => OrderStatus::OPEN]);
 
-            // Broadcast order created event
             event(new OrderCreated($sellOrder));
 
-            // Find matching buy orders (buy price >= sell price, sorted by price descending then oldest first)
             $matchingBuyOrder = Order::open()
                 ->where('symbol', $dto->symbol)
                 ->where('side', OrderSide::BUY)
@@ -272,7 +250,6 @@ class OrderService
             $order->status = OrderStatus::CANCELLED;
             $order->save();
 
-            // Broadcast order cancelled event
             event(new OrderCancelled($order));
 
             if($order->side === OrderSide::BUY) {
