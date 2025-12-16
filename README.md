@@ -128,7 +128,6 @@ VITE_REVERB_SCHEME=http
 VITE_API_URL=/api
 ```
 
-**Note:** For production, update `REVERB_HOST`, `REVERB_PORT`, and `REVERB_SCHEME` accordingly.
 
 ### 8. Build Frontend Assets
 
@@ -201,36 +200,6 @@ php artisan serve
 | `POST` | `/api/orders/{id}/cancel` | Cancel an order |
 | `POST` | `/api/broadcasting/auth` | Reverb authentication |
 
-### Request/Response Examples
-
-#### Register User
-
-```bash
-POST /api/register
-Content-Type: application/json
-
-{
-  "name": "John Doe",
-  "email": "john@example.com",
-  "password": "password123",
-  "password_confirmation": "password123"
-}
-```
-
-#### Create Limit Order
-
-```bash
-POST /api/orders
-Authorization: Bearer {token}
-Content-Type: application/json
-
-{
-  "symbol": "BTC",
-  "side": "buy",
-  "price": 95000.00,
-  "amount": 0.01
-}
-```
 
 ## 🎨 Frontend Routes
 
@@ -282,35 +251,7 @@ Run PHP tests:
 php artisan test
 ```
 
-Run specific test suite:
 
-```bash
-php artisan test --testsuite=Feature
-```
-
-### Testing with Seed Data
-
-For manual testing, you can use the test users created by the `TestDataSeeder`:
-
-1. **Seed the test data:**
-   ```bash
-   php artisan db:seed --class=TestDataSeeder
-   ```
-
-2. **Login as Buyer:**
-   - Email: `buyer@test.test`
-   - Password: `password`
-   - Create buy orders to purchase BTC or ETH from the seller
-
-3. **Login as Seller:**
-   - Email: `seller@test.test`
-   - Password: `password`
-   - Create sell orders to sell BTC or ETH to buyers
-
-4. **Test Order Matching:**
-   - Create a sell order as the seller (e.g., sell 0.1 BTC at $95,000)
-   - Create a matching buy order as the buyer (e.g., buy 0.1 BTC at $95,000 or higher)
-   - The orders should match automatically and both users' balances/assets will update
 
 ## 🔒 Security Features
 
@@ -319,38 +260,6 @@ For manual testing, you can use the test users created by the `TestDataSeeder`:
 - **Race Condition Protection:** Database row locking (`lockForUpdate()`)
 - **Transaction Safety:** All critical operations wrapped in DB transactions
 - **Input Validation:** All API endpoints validate input
-
-## 🐛 Troubleshooting
-
-### Reverb Not Working
-
-1. Verify Reverb credentials in `.env`
-2. Check `BROADCAST_CONNECTION=reverb`
-3. Ensure Reverb server is running: `php artisan reverb:start`
-4. Verify channel authorization in browser console
-5. Check Laravel logs: `storage/logs/laravel.log`
-
-### API Calls Failing
-
-1. Verify `VITE_API_URL` is set correctly
-2. Check Laravel CORS configuration
-3. Ensure Sanctum middleware is working
-4. Verify token is included in Authorization header
-
-### Real-time Updates Not Showing
-
-1. Ensure Reverb server is running: `php artisan reverb:start`
-2. Check Reverb connection in browser console
-3. Verify channel subscription
-4. Check Laravel broadcasting logs
-5. Ensure user is authenticated
-6. Verify WebSocket connection (check browser Network tab)
-
-### Frontend Build Issues
-
-1. Clear node modules and reinstall: `rm -rf node_modules && npm install`
-2. Clear Vite cache: `rm -rf node_modules/.vite`
-3. Rebuild: `npm run build`
 
 ## 🎯 Key Business Rules
 
@@ -374,21 +283,3 @@ For manual testing, you can use the test users created by the `TestDataSeeder`:
    - Buy orders: Refund locked USD to balance
    - Sell orders: Move locked assets back to available
 
-## 📚 Additional Resources
-
-- [Laravel Documentation](https://laravel.com/docs)
-- [Vue.js Documentation](https://vuejs.org/)
-- [Laravel Reverb Documentation](https://laravel.com/docs/reverb)
-- [Pinia Documentation](https://pinia.vuejs.org/)
-
-## 📄 License
-
-[Your License Here]
-
-## 👥 Contributors
-
-[Your Name/Team]
-
----
-
-For detailed API app setup instructions, see [API_APP_SETUP.md](./API_APP_SETUP.md)
