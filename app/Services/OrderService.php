@@ -2,11 +2,14 @@
 
 namespace App\Services;
 
+use App\Models\Asset;
 use App\Models\Order;
 use App\Enums\OrderSide;
 use App\Enums\OrderStatus;
 use App\DTOs\CreateLimitOrderDTO;
+use App\Models\User;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class OrderService
 {
@@ -31,7 +34,7 @@ class OrderService
     {
         if($dto->side === OrderSide::BUY) {
             return $this->buyOrder($dto);
-        }   
+        }
 
         if($dto->side === OrderSide::SELL) {
             return $this->sellOrder($dto);
@@ -42,79 +45,186 @@ class OrderService
 
     private function buyOrder(CreateLimitOrderDTO $dto): Order
     {
-        $userBalance = $dto->user->balance;
-        $assetPrice = $dto->price*$dto->amount;
-        if($userBalance < $assetPrice) {
-            throw new \Exception('Insufficient balance');
-        }
-        $dto->user->balance -= $assetPrice;
-        $dto->user->save();
+        return DB::transaction(function () use ($dto) {
+            $user = User::lockForUpdate()->find($dto->user->id);
+            if (!$user) {
+                throw new \Exception('User not found');
+            }
 
-        $buyOrder = Order::create($dto->toArray()+['status' => OrderStatus::OPEN]);
+            $assetPrice = $dto->price * $dto->amount;
+            if ($user->balance < $assetPrice) {
+                throw new \Exception('Insufficient balance');
+            }
 
-        // check if matching sell order is available
-        $matchingSellOrder = Order::open()->where('symbol', $dto->symbol)->where('side', OrderSide::SELL)->where('price', '<=', $dto->price)->oldest()->first();
-       
-        if($matchingSellOrder) {
-            $this->fillOrder($buyOrder, $matchingSellOrder);
-        }
+            $user->balance -= $assetPrice;
+            $user->save();
 
-        return $buyOrder;
+            $buyOrder = Order::create($dto->toArray() + ['status' => OrderStatus::OPEN]);
+
+            $matchingSellOrder = Order::open()
+                ->where('symbol', $dto->symbol)
+                ->where('side', OrderSide::SELL)
+                ->where('price', '<=', $dto->price)
+                ->oldest()
+                ->lockForUpdate()
+                ->first();
+
+
+            if ($matchingSellOrder) {
+                $lockedBuyOrder = Order::lockForUpdate()->find($buyOrder->id);
+
+                if ($lockedBuyOrder && $lockedBuyOrder->status === OrderStatus::OPEN) {
+                    try {
+                        $this->fillOrder($lockedBuyOrder, $matchingSellOrder);
+                        $buyOrder->refresh();
+                    } catch (\Exception $e) {
+                        logger()->error('Failed to fill order', ['error' => $e->getMessage()]);
+                    }
+                }
+            }
+
+            return $buyOrder;
+        });
     }
 
     private function fillOrder(Order $buyOrder, Order $sellOrder): void
     {
-        $buyOrder->status = OrderStatus::FILLED;
-        $buyOrder->save();
-        $sellOrder->status = OrderStatus::FILLED;
-        $sellOrder->save();
+        DB::transaction(function () use ($buyOrder, $sellOrder) {
+            $lockedBuyOrder = Order::lockForUpdate()->find($buyOrder->id);
+            $lockedSellOrder = Order::lockForUpdate()->find($sellOrder->id);
+
+            if (!$lockedBuyOrder || !$lockedSellOrder) {
+                throw new \Exception('Order not found');
+            }
+
+            if ($lockedBuyOrder->status !== OrderStatus::OPEN ||
+                $lockedSellOrder->status !== OrderStatus::OPEN) {
+                throw new \Exception('Order cannot be filled - status changed');
+            }
+
+            $lockedBuyOrder->status = OrderStatus::FILLED;
+            $lockedBuyOrder->save();
+            $lockedSellOrder->status = OrderStatus::FILLED;
+            $lockedSellOrder->save();
+
+            $totalSellingPrice = $lockedSellOrder->price * $lockedSellOrder->amount;
+            $commission = 0.015 * $totalSellingPrice;
+
+            $seller = User::lockForUpdate()->find($lockedSellOrder->user_id);
+            if (!$seller) {
+                throw new \Exception('Seller not found');
+            }
+            $seller->balance -= $commission;
+            $seller->save();
+
+            $asset = Asset::query()
+                ->where(['symbol' => $lockedBuyOrder->symbol, 'user_id' => $lockedBuyOrder->user_id])
+                ->lockForUpdate()
+                ->first();
+
+            if (!$asset) {
+                Asset::query()->create([
+                    'symbol' => $lockedBuyOrder->symbol,
+                    'user_id' => $lockedBuyOrder->user_id,
+                    'amount' => $lockedSellOrder->amount,
+                ]);
+            } else {
+                $asset->amount += $lockedSellOrder->amount;
+                $asset->save();
+            }
+        });
     }
 
     private function sellOrder(CreateLimitOrderDTO $dto): Order
     {
-        $asset = Asset::where('user_id', $dto->user->id)->where('symbol', $dto->symbol)->first();
-        // check if enough assets are available
-        if($asset->amount < $dto->amount) {
-            throw new \Exception('Insufficient assets');
-        }
-        
-        $asset->amount -= $dto->amount;
-        $asset->locked_amount += $dto->amount;
-        $asset->save();
+        return DB::transaction(function () use ($dto) {
+            $asset = Asset::query()
+                ->where('user_id', $dto->user->id)
+                ->where('symbol', $dto->symbol)
+                ->lockForUpdate()
+                ->first();
 
-        $sellOrder = Order::create($dto->toArray()+['status' => OrderStatus::OPEN]);
+            if (!$asset) {
+                throw new \Exception('Asset not found');
+            }
 
-        // check if matching buy order is available
-        $matchingBuyOrder = Order::open()->where('symbol', $dto->symbol)->where('side', OrderSide::BUY)->where('price', '>=', $dto->price)->oldest()->first();
-        if($matchingBuyOrder) {
-            $this->fillOrder($matchingBuyOrder, $sellOrder);
-        }
+            if ($asset->amount < $dto->amount) {
+                throw new \Exception('Insufficient assets');
+            }
 
-        return $sellOrder;
+            $asset->amount -= $dto->amount;
+            $asset->locked_amount += $dto->amount;
+            $asset->save();
 
+            $sellOrder = Order::create($dto->toArray() + ['status' => OrderStatus::OPEN]);
+
+            $matchingBuyOrder = Order::open()
+                ->where('symbol', $dto->symbol)
+                ->where('side', OrderSide::BUY)
+                ->where('price', '>=', $dto->price)
+                ->oldest()
+                ->lockForUpdate()
+                ->first();
+
+
+            if ($matchingBuyOrder) {
+                $lockedSellOrder = Order::lockForUpdate()->find($sellOrder->id);
+                if ($lockedSellOrder && $lockedSellOrder->status === OrderStatus::OPEN) {
+                    try {
+                        $this->fillOrder($matchingBuyOrder, $lockedSellOrder);
+                        $sellOrder->refresh();
+                    } catch (\Exception $e) {
+                       logger()->error('Failed to fill order', ['error' => $e->getMessage()]);
+                    }
+                }
+            }
+
+            return $sellOrder;
+        });
     }
 
     public function cancelOrder(string $id): Order
     {
-        $order = Order::find($id);
-        if(!$order) {
-            throw new \Exception('Order not found');
-        }
-        $order->status = OrderStatus::CANCELLED;
-        $order->save();
+       return DB::transaction(function () use ($id) {
+            $order = Order::lockForUpdate()->find($id);
+            if(!$order) {
+                throw new \Exception('Order not found');
+            }
 
-        if($order->side === OrderSide::BUY) {
-            $order->user->balance += $order->price * $order->amount;
-            $order->user->save();
-        }
+            if(in_array($order->status, [OrderStatus::FILLED, OrderStatus::CANCELLED])) {
+                throw new \Exception('Order cannot be cancelled');
+            }
+            $order->status = OrderStatus::CANCELLED;
+            $order->save();
 
-        if($order->side === OrderSide::SELL) {
-            $asset = Asset::where('user_id', $order->user_id)->where('symbol', $order->symbol)->first();
-            $asset->amount += $order->amount;
-            $asset->locked_amount -= $order->amount;
-            $asset->save();
-        }
+            if($order->side === OrderSide::BUY) {
+                $buyer = User::lockForUpdate()->find($order->user_id);
+                if(!$buyer) {
+                    throw new \Exception('Buyer not found');
+                }
 
-        return $order;
+                $buyer->balance += $order->price * $order->amount;
+                $buyer->save();
+            }
+
+            if($order->side === OrderSide::SELL) {
+                $asset = Asset::query()
+                    ->where('user_id', $order->user_id)
+                    ->where('symbol', $order->symbol)
+                    ->lockForUpdate()
+                    ->first();
+
+                if(!$asset) {
+                    throw new \Exception('Asset not found');
+                }
+
+                $asset->amount += $order->amount;
+                $asset->locked_amount -= $order->amount;
+                $asset->save();
+            }
+
+            return $order;
+      });
+
     }
 }

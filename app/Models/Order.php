@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\OrderSide;
 use App\Enums\OrderStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Builder;
@@ -11,6 +12,11 @@ class Order extends Model
 {
     /** @use HasFactory<\Database\Factories\OrderFactory> */
     use HasFactory;
+
+    protected $casts = [
+        'status' => OrderStatus::class,
+        'side' => OrderSide::class
+    ];
 
     protected $fillable = [
         'user_id',
